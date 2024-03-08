@@ -1,0 +1,9 @@
+﻿{
+    "MonitoringIntervalMS": 200,
+    "ProcessIconSettings": [
+        {
+            "ProcessPath": "D:\\FirefoxPortableForWorks\\App\\Firefox64\\firefox.exe",
+            "IconPath": "D:\\FirefoxPortableForWorks\\favicon.ico"
+        }
+    ]
+}
