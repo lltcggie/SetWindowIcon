@@ -80,6 +80,9 @@ namespace SetWindowIcon
         // 何回もバッファ生成するのはなんなので保持しておく
         private static StringBuilder mStringBuffer = new StringBuilder(1024);
 
+        private static readonly object mLock = new object();
+        private static bool mResumeFlag = false;
+
         /// <summary>
         /// アプリケーションのメイン エントリ ポイントです。
         /// </summary>
@@ -168,6 +171,39 @@ namespace SetWindowIcon
             mIcon.Visible = true;
         }
 
+        private static void SetPowerModeChangedEvent()
+        {
+            Microsoft.Win32.SystemEvents.InvokeOnEventsThread(new Action(() =>
+            {
+                Microsoft.Win32.SystemEvents.PowerModeChanged += (s, e) =>
+                {
+                    switch (e.Mode)
+                    {
+                        case Microsoft.Win32.PowerModes.Suspend:
+                            mTimer.Enabled = false;
+                            lock (mLock)
+                            {
+                                mResumeFlag = true;
+                            }
+                            break;
+
+                        case Microsoft.Win32.PowerModes.Resume:
+                            mTimer.Enabled = true;
+                            lock (mLock)
+                            {
+                                mResumeFlag = false;
+                            }
+                            break;
+                    }
+                };
+                //Microsoft.Win32.SystemEvents.SessionSwitch += (s, e) => logger.Debug("OnSessionSwitch");
+                //Microsoft.Win32.SystemEvents.SessionEnding += (s, e) => logger.Debug("OnSessionEnding");
+                //Microsoft.Win32.SystemEvents.SessionEnded += (s, e) => logger.Debug("OnSessionEnded");
+                //Microsoft.Win32.SystemEvents.EventsThreadShutdown += (s, e) => logger.Debug("OnEventsThreadShutdown");
+            }));
+        }
+
+
         private static ContextMenuStrip ContextMenu()
         {
             // アイコンを右クリックしたときのメニューを返却
@@ -183,17 +219,25 @@ namespace SetWindowIcon
 
         private static void OnTimedEvent(Object source, ElapsedEventArgs e)
         {
-            foreach (var key in new List<Tuple<uint, IntPtr>>(mUpdatedHwndList.Keys))
+            lock (mLock)
             {
-                mUpdatedHwndList[key] = 0;
-            }
+                if (mResumeFlag)
+                {
+                    return;
+                }
 
-            EnumWindows(EnumerateWindows, IntPtr.Zero);
+                foreach (var key in new List<Tuple<uint, IntPtr>>(mUpdatedHwndList.Keys))
+                {
+                    mUpdatedHwndList[key] = 0;
+                }
 
-            // 今回見つからなかった物はもう消えたということでキャッシュから消す
-            foreach (var item in mUpdatedHwndList.Where(x => x.Value == 0).ToList())
-            {
-                mUpdatedHwndList.Remove(item.Key);
+                EnumWindows(EnumerateWindows, IntPtr.Zero);
+
+                // 今回見つからなかった物はもう消えたということでキャッシュから消す
+                foreach (var item in mUpdatedHwndList.Where(x => x.Value == 0).ToList())
+                {
+                    mUpdatedHwndList.Remove(item.Key);
+                }
             }
         }
 
