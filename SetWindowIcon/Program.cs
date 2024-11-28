@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -132,7 +133,7 @@ namespace SetWindowIcon
         {
             MonitoringSetting ret;
 
-            string settingPath = Path.Combine(GetExeDir(), "Setting.json");
+            string settingPath = System.IO.Path.Combine(GetExeDir(), "Setting.json");
             using (FileStream fileStream = File.OpenRead(settingPath))
             {
                 using (StreamReader reader = new StreamReader(fileStream, System.Text.Encoding.UTF8))
@@ -146,7 +147,7 @@ namespace SetWindowIcon
 
         static string GetExeDir()
         {
-            return Path.GetDirectoryName(Application.ExecutablePath);
+            return System.IO.Path.GetDirectoryName(Application.ExecutablePath);
         }
 
         private static void SetTimer()
@@ -178,9 +179,22 @@ namespace SetWindowIcon
             return menu;
         }
 
+        private static Dictionary<Tuple<uint, IntPtr>, uint> mUpdatedHwndList = new Dictionary<Tuple<uint, IntPtr>, uint>();
+
         private static void OnTimedEvent(Object source, ElapsedEventArgs e)
         {
+            foreach (var key in new List<Tuple<uint, IntPtr>>(mUpdatedHwndList.Keys))
+            {
+                mUpdatedHwndList[key] = 0;
+            }
+
             EnumWindows(EnumerateWindows, IntPtr.Zero);
+
+            // 今回見つからなかった物はもう消えたということでキャッシュから消す
+            foreach (var item in mUpdatedHwndList.Where(x => x.Value == 0).ToList())
+            {
+                mUpdatedHwndList.Remove(item.Key);
+            }
         }
 
         // ウィンドウを列挙するコールバックメソッド
@@ -198,13 +212,24 @@ namespace SetWindowIcon
 
             // ウィンドウハンドルからプロセスIDを取得
             uint processId;
-            GetWindowThreadProcessId(hWnd, out processId);
-
+            if (GetWindowThreadProcessId(hWnd, out processId) == 0)
+            {
+                return true;
+            }
 
             var hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            if (hProc == IntPtr.Zero)
+            {
+                return true;
+            }
 
             int count = mStringBuffer.Capacity;
-            QueryFullProcessImageNameW(hProc, 0, mStringBuffer, ref count);
+            if (!QueryFullProcessImageNameW(hProc, 0, mStringBuffer, ref count))
+            {
+                CloseHandle(hProc);
+
+                return true;
+            }
 
             CloseHandle(hProc);
 
@@ -215,7 +240,7 @@ namespace SetWindowIcon
                 Tuple<Icon, Icon> icons;
                 if (mProcessIconMap.TryGetValue(path, out icons))
                 {
-                    UpdateIcon(hWnd, icons);
+                    UpdateIcon(processId, hWnd, icons);
                 }
             }
             catch (Exception) { }
@@ -223,10 +248,21 @@ namespace SetWindowIcon
             return true;
         }
 
-        static void UpdateIcon(IntPtr hWnd, Tuple<Icon, Icon> icons)
+        static void UpdateIcon(uint processId, IntPtr hWnd, Tuple<Icon, Icon> icons)
         {
-            SendMessage(hWnd, WM_SETICON, ICON_BIG, icons.Item1.Handle);
-            SendMessage(hWnd, WM_SETICON, ICON_SMALL, icons.Item2.Handle);
+            Tuple<uint, IntPtr> key = new Tuple<uint, IntPtr>(processId, hWnd);
+
+            uint count = 0;
+            if (mUpdatedHwndList.TryGetValue(key, out count)) // すでにアイコン変更済み
+            {
+                mUpdatedHwndList[key] = count + 1;
+            }
+            else // 初めて見つけたhWnd
+            {
+                SendMessage(hWnd, WM_SETICON, ICON_BIG, icons.Item1.Handle);
+                SendMessage(hWnd, WM_SETICON, ICON_SMALL, icons.Item2.Handle);
+                mUpdatedHwndList[key] = 1;
+            }
         }
     }
 }
